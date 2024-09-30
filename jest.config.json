@@ -1,7 +1,3 @@
 {
-  "collectCoverage": true,
-  "coverageReporters": [
-    "json-summary",
-    "text"
-  ]
+  "collectCoverage": true
 }
