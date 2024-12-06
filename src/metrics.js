@@ -51,7 +51,7 @@ class Metrics {
     setInterval(() => {
       this.collectSystemMetrics();
       this.flushMetrics();
-    }, 15000);
+    }, 30000);
 
     metricsEmitter.on('metric:increment', ({ metricName, amount = 1 }) => {
       this.incrementMetric(metricName, amount);
