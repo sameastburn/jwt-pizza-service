@@ -3,6 +3,7 @@ const config = require('../config.js');
 const { Role, DB } = require('../database/database.js');
 const { authRouter } = require('./authRouter.js');
 const { asyncHandler, StatusCodeError } = require('../endpointHelper.js');
+const { metricsEmitter } = require('../metrics');
 
 const orderRouter = express.Router();
 
@@ -77,18 +78,70 @@ orderRouter.post(
   '/',
   authRouter.authenticateToken,
   asyncHandler(async (req, res) => {
-    const orderReq = req.body;
-    const order = await DB.addDinerOrder(req.user, orderReq);
-    const r = await fetch(`${config.factory.url}/api/order`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
-      body: JSON.stringify({ diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order }),
-    });
-    const j = await r.json();
-    if (r.ok) {
-      res.send({ order, jwt: j.jwt, reportUrl: j.reportUrl });
-    } else {
-      res.status(500).send({ message: 'Failed to fulfill order at factory', reportUrl: j.reportUrl });
+    try {
+      const orderReq = req.body;
+      const order = await DB.addDinerOrder(req.user, orderReq);
+
+      // Calculate revenue and sold count
+      const soldCount = orderReq.items.length;
+      const revenue = orderReq.items.reduce((acc, item) => acc + (item.price || 0), 0);
+
+      // Track latency specifically for pizza creation
+      const factoryStart = Date.now();
+      const r = await fetch(`${config.factory.url}/api/order`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
+        body: JSON.stringify({ diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order }),
+      });
+      const factoryEnd = Date.now();
+
+      // Measure pizza creation latency
+      const pizzaCreationLatency = factoryEnd - factoryStart;
+      metricsEmitter.emit('metric:set', {
+        metricName: 'latencyMetrics_pizzaCreation',
+        value: pizzaCreationLatency,
+      });
+
+      if (r.ok) {
+        // Factory fulfilled the order successfully
+        const j = await r.json();
+
+        // Increment sold and revenue metrics
+        metricsEmitter.emit('metric:increment', {
+          metricName: 'pizzaMetrics_sold',
+          amount: soldCount,
+        });
+
+        metricsEmitter.emit('metric:increment', {
+          metricName: 'pizzaMetrics_revenue',
+          amount: revenue,
+        });
+
+        res.send({ order, jwt: j.jwt, reportUrl: j.reportUrl });
+      } else {
+        // Handle factory failure
+        const errorResponse = await r.json();
+        metricsEmitter.emit('metric:increment', {
+          metricName: 'pizzaMetrics_creationFailures',
+          amount: 1,
+        });
+
+        res.status(500).send({
+          message: 'Failed to fulfill order at factory',
+          reportUrl: errorResponse.reportUrl,
+        });
+      }
+    } catch (err) {
+      // Handle any unexpected errors
+      metricsEmitter.emit('metric:increment', {
+        metricName: 'pizzaMetrics_creationFailures',
+        amount: 1,
+      });
+
+      res.status(500).send({
+        message: 'An unexpected error occurred while creating the order',
+        error: err.message,
+      });
     }
   })
 );

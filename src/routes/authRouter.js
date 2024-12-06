@@ -3,6 +3,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config.js');
 const { asyncHandler } = require('../endpointHelper.js');
 const { DB, Role } = require('../database/database.js');
+const { metricsEmitter } = require('../metrics');
 
 const authRouter = express.Router();
 
@@ -82,18 +83,48 @@ authRouter.put(
   '/',
   asyncHandler(async (req, res) => {
     const { email, password } = req.body;
-    const user = await DB.getUser(email, password);
-    const auth = await setAuth(user);
-    res.json({ user: user, token: auth });
+
+    try {
+      const user = await DB.getUser(email, password);
+      const auth = await setAuth(user);
+
+      // Update metrics
+      metricsEmitter.emit('metric:increment', {
+        metricName: 'authAttempts_successful',
+        amount: 1,
+      });
+
+      metricsEmitter.emit('metric:increment', {
+        metricName: 'activeUsers',
+        amount: 1,
+      });
+
+      res.json({ user, token: auth });
+    } catch {
+      // Update metrics for failed login
+      metricsEmitter.emit('metric:increment', {
+        metricName: 'authAttempts_failed',
+        amount: 1,
+      });
+      res.status(401).json({ message: 'Invalid credentials' });
+    }
   })
 );
 
-// logout
+
+// Logout a user
 authRouter.delete(
   '/',
   authRouter.authenticateToken,
   asyncHandler(async (req, res) => {
-    clearAuth(req);
+    await clearAuth(req);
+
+    // Decrement active users
+    metricsEmitter.emit('metric:decrement', {
+      metricName: 'activeUsers',
+      amount: 1,
+    });
+
     res.json({ message: 'logout successful' });
   })
 );
