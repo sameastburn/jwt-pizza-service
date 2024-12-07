@@ -3,7 +3,8 @@ const config = require('../config.js');
 const { Role, DB } = require('../database/database.js');
 const { authRouter } = require('./authRouter.js');
 const { asyncHandler, StatusCodeError } = require('../endpointHelper.js');
-const { metricsEmitter } = require('../metrics');
+const { metricsEmitter } = require('../metrics.js');
+const { logger } = require('../logger.js');
 
 const orderRouter = express.Router();
 
@@ -88,14 +89,22 @@ orderRouter.post(
 
       // Track latency specifically for pizza creation
       const factoryStart = Date.now();
+
+      // Log the request to the factory
+      logger.factoryLogger({
+        action: 'request',
+        message: 'Sending order to factory',
+        diner: { id: req.user.id, name: req.user.name, email: req.user.email },
+        order: order,
+      });
+
       const r = await fetch(`${config.factory.url}/api/order`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', authorization: `Bearer ${config.factory.apiKey}` },
         body: JSON.stringify({ diner: { id: req.user.id, name: req.user.name, email: req.user.email }, order }),
       });
-      const factoryEnd = Date.now();
 
-      // Measure pizza creation latency
+      const factoryEnd = Date.now();
       const pizzaCreationLatency = factoryEnd - factoryStart;
       metricsEmitter.emit('metric:set', {
         metricName: 'latencyMetrics_pizzaCreation',
@@ -103,10 +112,16 @@ orderRouter.post(
       });
 
       if (r.ok) {
-        // Factory fulfilled the order successfully
-        const j = await r.json();
+        const responseBody = await r.json();
 
-        // Increment sold and revenue metrics
+        // Log the factory response
+        logger.factoryLogger({
+          action: 'response',
+          message: 'Factory responded successfully',
+          response: responseBody,
+        });
+
+        // Increment metrics and respond to the client
         metricsEmitter.emit('metric:increment', {
           metricName: 'pizzaMetrics_sold',
           amount: soldCount,
@@ -117,10 +132,17 @@ orderRouter.post(
           amount: revenue,
         });
 
-        res.send({ order, jwt: j.jwt, reportUrl: j.reportUrl });
+        res.send({ order, jwt: responseBody.jwt, reportUrl: responseBody.reportUrl });
       } else {
-        // Handle factory failure
         const errorResponse = await r.json();
+
+        // Log the factory error response
+        logger.factoryLogger({
+          action: 'response',
+          message: 'Factory responded with an error',
+          response: errorResponse,
+        });
+
         metricsEmitter.emit('metric:increment', {
           metricName: 'pizzaMetrics_creationFailures',
           amount: 1,

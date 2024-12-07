@@ -147,8 +147,6 @@ class Metrics {
       })
       .join('\n');
 
-    // console.log('payload: ', payload);
-
     if (!payload) return;
 
     try {
@@ -177,8 +175,6 @@ const requestTracker = (req, res, next) => {
   const method = req.method;
 
   const start = Date.now();
-
-  console.log('requestTracker method: ', method);
 
   metricsEmitter.emit('metric:increment', {
     metricName: `requestCounts_${method}`,
